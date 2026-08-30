@@ -207,7 +207,7 @@ docs.forEach((doc,i)=>{
 });
 
 console.log("\n=== Feature Checks ===");
-const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'dist/index.html'),'utf8');
 const checks=[
   ["Drag-drop zone",/id="zone"/.test(html)],
   ["PDF.js extractPdf",/pdfjsLib/.test(html)&&/extractPdf/.test(html)],

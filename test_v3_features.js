@@ -1,5 +1,5 @@
 const fs=require('fs'),path=require('path');
-const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'dist/index.html'),'utf8');
 console.log("=== DocuWeave v3 Feature Audit ===\n");
 const checks=[
   // Core preserved
