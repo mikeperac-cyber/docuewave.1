@@ -1,0 +1,8 @@
+{
+  "name": "DocuWeave",
+  "description": "PDF to Webpage Studio — Extract, analyze with TextRank and TF-IDF, and weave beautiful interactive webpages from PDFs, DOCX, and text documents.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ],
+  "permissions": []
+}

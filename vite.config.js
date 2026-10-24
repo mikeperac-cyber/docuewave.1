@@ -1,17 +1,10 @@
 import { defineConfig } from 'vite'
-import { viteSingleFile } from 'vite-plugin-singlefile'
+import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-  plugins: [viteSingleFile()],
-  build: {
-    target: 'esnext',
-    assetsInlineLimit: 100000000,
-    chunkSizeWarningLimit: 100000000,
-    cssCodeSplit: false,
-    brotliSize: false,
-    minify: false,
-    rollupOptions: {
-      treeshake: false
-    }
-  },
+  plugins: [react()],
+  server: {
+    host: '0.0.0.0',
+    port: 3000
+  }
 })
