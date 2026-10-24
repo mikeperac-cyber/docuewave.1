@@ -1,13 +1,15 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { AnalysisResult, AskHit } from '../types';
 import {
   askDocEngine,
+  calculateReadability,
   downloadBlob,
   escapeHtml,
   escapeReg,
   splitSentencesOptimized,
   themes,
 } from '../utils/engine';
+import { exportStructuredPDF } from '../utils/pdfExport';
 
 interface WebpageViewProps {
   analysis: AnalysisResult;
@@ -47,6 +49,79 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
   const titleRef = useRef<HTMLHeadingElement>(null);
   const subtitleRef = useRef<HTMLParagraphElement>(null);
   const summaryRef = useRef<HTMLDivElement>(null);
+
+  // Calculate Flesch-Kincaid readability score dynamically from the analysis text (summary + key points)
+  const analysisReadability = useMemo(() => {
+    const pointsText = (analysis.keyPoints || []).map((p) => p.sentence).join(' ');
+    const analysisText = `${analysis.summary || ''} ${pointsText}`.trim();
+    if (!analysisText) {
+      return analysis.readability;
+    }
+    const words = analysisText.split(/\s+/).filter(Boolean);
+    const sentences = splitSentencesOptimized(analysisText);
+    return calculateReadability(words, sentences);
+  }, [analysis.summary, analysis.keyPoints, analysis.readability]);
+
+  // Calculate baseline readability from the raw source document
+  const sourceReadability = useMemo(() => {
+    if (!rawText) return null;
+    const words = rawText.split(/\s+/).filter(Boolean);
+    const sentences = splitSentencesOptimized(rawText);
+    return calculateReadability(words, sentences);
+  }, [rawText]);
+
+  // Visual highlighting state and top 5 keywords from TF-IDF analysis
+  const [showKeywordHighlights, setShowKeywordHighlights] = useState(true);
+
+  const top5Keywords = useMemo(() => {
+    return (analysis.topKeywords || []).slice(0, 5);
+  }, [analysis.topKeywords]);
+
+  const renderHighlightedSummary = () => {
+    if (editMode || !showKeywordHighlights || !top5Keywords.length || !analysis.summary) {
+      return analysis.summary;
+    }
+
+    const terms = top5Keywords.map((k) => k.term).filter((t) => t && t.length >= 2);
+    if (!terms.length) return analysis.summary;
+
+    const pattern = new RegExp(`\\b(${terms.map(escapeReg).join('|')})\\b`, 'gi');
+    const parts = analysis.summary.split(pattern);
+
+    return parts.map((part, i) => {
+      const lower = part.toLowerCase();
+      const kwIdx = terms.findIndex((t) => t.toLowerCase() === lower);
+      if (kwIdx !== -1) {
+        const rank = kwIdx + 1;
+        const kwData = top5Keywords[kwIdx];
+        return (
+          <span
+            key={i}
+            className="tfidf-kw"
+            style={{
+              background: '#fef08a',
+              color: '#854d0e',
+              padding: '1px 5px',
+              borderRadius: '4px',
+              fontWeight: 600,
+              borderBottom: '1.5px solid #eab308',
+              cursor: 'pointer',
+              display: 'inline-block',
+              transition: 'all 0.15s ease',
+            }}
+            title={`Top TF-IDF Keyword #${rank}: "${part}" (${kwData?.count || 1} mentions, score ${kwData?.score.toFixed(1) || ''}) — Click to find in document`}
+            onClick={(e) => {
+              e.stopPropagation();
+              searchWebpage(part);
+            }}
+          >
+            {part}
+          </span>
+        );
+      }
+      return part;
+    });
+  };
 
   // QR Code generation in TOC quick share
   useEffect(() => {
@@ -287,6 +362,11 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
     ...analysis.topBigrams.slice(0, 4),
   ].slice(0, 10);
 
+  const handleExportPDF = () => {
+    if (!analysis) return;
+    exportStructuredPDF(analysis, { includeSource: true, rawText });
+  };
+
   const copyBriefing = (e: React.MouseEvent<HTMLButtonElement>) => {
     const txt = `Title: ${analysis.title}\nSubtitle: ${analysis.subtitle}\n\nCOMPREHENSIVE SUMMARY (${analysis.summaryWords}w):\n${analysis.summary}\n\nONE LINER:\n${analysis.oneLiner}\n\nKEY POINTS (${analysis.keyPoints.length}):\n${analysis.keyPoints
       .map((p, i) => `${i + 1}. ${p.sentence}`)
@@ -401,11 +481,14 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
               }}
             />
             <div style={{ display: 'grid', gap: '6px', marginTop: '8px' }}>
-              <button className="btn dark" onClick={onOpenExport}>
+              <button className="btn dark" onClick={handleExportPDF} title="Export as structured PDF report using jsPDF">
+                📄 Structured PDF
+              </button>
+              <button className="btn" onClick={onOpenExport}>
                 ⬇ Download HTML
               </button>
               <button className="btn" onClick={onOpenExport}>
-                ⬇ Markdown
+                ⬇ Markdown / More…
               </button>
               <button className="btn" onClick={copyBriefing}>
                 🔗 Copy briefing
@@ -534,12 +617,14 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
               <span className="hero-stat">⬢ {analysis.factors.length} factors</span>
               <span className="hero-stat">{analysis.topKeywords[0]?.term || 'analysis'} • top</span>
               <span className="hero-stat">{analysis.summaryRatio}% distilled</span>
-              {analysis.readability && (
+              {analysisReadability && (
                 <span
                   className="hero-stat"
-                  title={`Flesch-Kincaid Grade: ${analysis.readability.fleschKincaidGrade.toFixed(1)} (${analysis.readability.level})`}
+                  id="wHeroReadability"
+                  title={`Analysis Text Flesch-Kincaid Grade: ${analysisReadability.fleschKincaidGrade.toFixed(1)} • Reading Ease: ${analysisReadability.fleschReadingEase}/100 (${analysisReadability.level})`}
+                  style={{ background: 'rgba(255, 255, 255, 0.22)', border: '1px solid rgba(255, 255, 255, 0.35)' }}
                 >
-                  📖 {analysis.readability.level} (Grade {analysis.readability.fleschKincaidGrade.toFixed(1)})
+                  📖 Flesch-Kincaid: Grade {analysisReadability.fleschKincaidGrade.toFixed(1)} ({analysisReadability.level})
                 </span>
               )}
               {analysis.isCompare && <span className="hero-stat">⇔ Compare</span>}
@@ -578,8 +663,102 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                 >
                   • {analysis.summaryWords}w • {analysis.summaryRatio}% •{' '}
                   {analysis.coverage.filter(Boolean).length}/3 zones
+                  {analysisReadability && (
+                    <span
+                      style={{
+                        marginLeft: '8px',
+                        background: analysisReadability.fleschReadingEase >= 60 ? '#ecfdf5' : '#fffbeb',
+                        color: analysisReadability.fleschReadingEase >= 60 ? '#065f46' : '#92400e',
+                        border: `1px solid ${analysisReadability.fleschReadingEase >= 60 ? '#a7f3d0' : '#fde68a'}`,
+                        borderRadius: '999px',
+                        padding: '2px 8px',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        display: 'inline-block',
+                      }}
+                      title="Flesch-Kincaid grade level calculated from the analysis text"
+                    >
+                      Flesch-Kincaid Grade {analysisReadability.fleschKincaidGrade.toFixed(1)}
+                    </span>
+                  )}
                 </small>
               </h2>
+
+              {/* Top 5 TF-IDF Keywords Highlight Bar */}
+              {top5Keywords.length > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    flexWrap: 'wrap',
+                    gap: '8px',
+                    marginBottom: '10px',
+                    padding: '8px 12px',
+                    background: '#fffdf5',
+                    border: '1px solid #fef08a',
+                    borderRadius: '12px',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        color: '#854d0e',
+                        textTransform: 'uppercase',
+                        letterSpacing: '.05em',
+                      }}
+                    >
+                      Top 5 TF-IDF Keywords:
+                    </span>
+                    {top5Keywords.map((k, idx) => (
+                      <span
+                        key={idx}
+                        className="chip"
+                        style={{
+                          background: showKeywordHighlights ? '#fef08a' : '#fff',
+                          borderColor: '#fde047',
+                          color: '#854d0e',
+                          cursor: 'pointer',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          transition: 'all 0.15s ease',
+                        }}
+                        onClick={() => searchWebpage(k.term)}
+                        title={`Rank #${idx + 1} (${k.count} mentions, TF-IDF score ${k.score.toFixed(1)}) — Click to find in document`}
+                      >
+                        <span style={{ opacity: 0.65, marginRight: '3px' }}>#{idx + 1}</span> {k.term}
+                      </span>
+                    ))}
+                  </div>
+
+                  {!editMode && (
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '11px',
+                        color: '#854d0e',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        fontWeight: 600,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={showKeywordHighlights}
+                        onChange={(e) => setShowKeywordHighlights(e.target.checked)}
+                        style={{ accentColor: '#eab308', cursor: 'pointer' }}
+                      />
+                      <span>Highlight in summary</span>
+                    </label>
+                  )}
+                </div>
+              )}
+
               <div
                 className={`summary-box ${editMode ? 'editing' : ''}`}
                 id="wSummary"
@@ -587,7 +766,7 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                 contentEditable={editMode}
                 suppressContentEditableWarning
               >
-                {analysis.summary}
+                {renderHighlightedSummary()}
               </div>
               {analysis.oneLiner && (
                 <div className="quote" id="wOneLiner" style={{ marginTop: '10px', display: 'block' }}>
@@ -1001,32 +1180,32 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                   <b>{analysis.pages}</b>
                   <span>Pages</span>
                 </div>
-                {analysis.readability && (
+                {analysisReadability && (
                   <>
                     <div className="stat">
                       <b
                         style={{
                           color:
-                            analysis.readability.fleschReadingEase >= 60
+                            analysisReadability.fleschReadingEase >= 60
                               ? '#059669'
-                              : analysis.readability.fleschReadingEase >= 40
+                              : analysisReadability.fleschReadingEase >= 40
                               ? '#d97706'
                               : '#7c3aed',
                         }}
                       >
-                        {analysis.readability.fleschReadingEase}
+                        {analysisReadability.fleschReadingEase}
                       </b>
                       <span>Reading Ease / 100</span>
                     </div>
                     <div className="stat">
-                      <b>Grade {analysis.readability.fleschKincaidGrade.toFixed(1)}</b>
+                      <b>Grade {analysisReadability.fleschKincaidGrade.toFixed(1)}</b>
                       <span>Flesch-Kincaid</span>
                     </div>
                   </>
                 )}
               </div>
 
-              {analysis.readability && (
+              {analysisReadability && (
                 <div
                   id="wReadability"
                   style={{
@@ -1064,30 +1243,30 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                         📖
                       </span>
                       <div>
-                        <b style={{ fontSize: '13px' }}>Document Readability & Complexity (Flesch-Kincaid)</b>
+                        <b style={{ fontSize: '13px' }}>Analysis Text Readability (Flesch-Kincaid)</b>
                         <div style={{ fontSize: '11px', color: 'var(--muted)' }}>
-                          Empirical formula based on average sentence length and syllable density
+                          Calculated from the woven summary and extracted key points
                         </div>
                       </div>
                     </div>
                     <span
                       style={{
                         background:
-                          analysis.readability.fleschReadingEase >= 60
+                          analysisReadability.fleschReadingEase >= 60
                             ? '#ecfdf5'
-                            : analysis.readability.fleschReadingEase >= 40
+                            : analysisReadability.fleschReadingEase >= 40
                             ? '#fffbeb'
                             : '#f5f3ff',
                         color:
-                          analysis.readability.fleschReadingEase >= 60
+                          analysisReadability.fleschReadingEase >= 60
                             ? '#065f46'
-                            : analysis.readability.fleschReadingEase >= 40
+                            : analysisReadability.fleschReadingEase >= 40
                             ? '#92400e'
                             : '#5b21b6',
                         border: `1px solid ${
-                          analysis.readability.fleschReadingEase >= 60
+                          analysisReadability.fleschReadingEase >= 60
                             ? '#a7f3d0'
-                            : analysis.readability.fleschReadingEase >= 40
+                            : analysisReadability.fleschReadingEase >= 40
                             ? '#fde68a'
                             : '#ddd6fe'
                         }`,
@@ -1098,7 +1277,7 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                         letterSpacing: '.03em',
                       }}
                     >
-                      {analysis.readability.level} • Grade {analysis.readability.fleschKincaidGrade.toFixed(1)}
+                      {analysisReadability.level} • Grade {analysisReadability.fleschKincaidGrade.toFixed(1)}
                     </span>
                   </div>
 
@@ -1114,10 +1293,9 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                       }}
                     >
                       <span>
-                        Reading Ease Score: <b>{analysis.readability.fleschReadingEase}/100</b> (
-                        {analysis.readability.level})
+                        Flesch Reading Ease: <b>{analysisReadability.fleschReadingEase}/100</b> ({analysisReadability.level})
                       </span>
-                      <span style={{ color: 'var(--muted)' }}>Target: 60–80 (Plain English)</span>
+                      <span style={{ color: 'var(--muted)' }}>Flesch-Kincaid Grade: <b>{analysisReadability.fleschKincaidGrade.toFixed(1)}</b></span>
                     </div>
                     <div
                       style={{
@@ -1131,11 +1309,11 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                       <div
                         style={{
                           height: '100%',
-                          width: `${analysis.readability.fleschReadingEase}%`,
+                          width: `${analysisReadability.fleschReadingEase}%`,
                           background:
-                            analysis.readability.fleschReadingEase >= 60
+                            analysisReadability.fleschReadingEase >= 60
                               ? 'linear-gradient(90deg, #10b981, #059669)'
-                              : analysis.readability.fleschReadingEase >= 40
+                              : analysisReadability.fleschReadingEase >= 40
                               ? 'linear-gradient(90deg, #f59e0b, #d97706)'
                               : 'linear-gradient(90deg, #8b5cf6, #6d28d9)',
                           borderRadius: '999px',
@@ -1153,9 +1331,9 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                         fontFamily: 'JetBrains Mono, monospace',
                       }}
                     >
-                      <span>0 (Academic / Very Dense)</span>
+                      <span>0 (Dense / Academic)</span>
                       <span>50 (High School)</span>
-                      <span>100 (Elementary / Very Easy)</span>
+                      <span>100 (Plain English / Conversational)</span>
                     </div>
                   </div>
 
@@ -1188,10 +1366,10 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                         Target Audience
                       </div>
                       <b style={{ fontSize: '13px', display: 'block', marginTop: '2px', color: 'var(--ink)' }}>
-                        {analysis.readability.audience}
+                        {analysisReadability.audience}
                       </b>
                       <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px' }}>
-                        {analysis.readability.description}
+                        {analysisReadability.description}
                       </div>
                     </div>
 
@@ -1215,13 +1393,13 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                         Avg Sentence Length
                       </div>
                       <b style={{ fontSize: '13px', display: 'block', marginTop: '2px', color: 'var(--ink)' }}>
-                        {analysis.readability.avgWordsPerSentence} words / sentence
+                        {analysisReadability.avgWordsPerSentence} words / sentence
                       </b>
                       <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px' }}>
-                        {analysis.readability.avgWordsPerSentence > 22
+                        {analysisReadability.avgWordsPerSentence > 22
                           ? 'Longer sentences; consider breaking up for clarity'
-                          : analysis.readability.avgWordsPerSentence < 12
-                          ? 'Crisp, concise phrasing'
+                          : analysisReadability.avgWordsPerSentence < 12
+                          ? 'Crisp, concise sentence structure'
                           : 'Balanced sentence flow'}
                       </div>
                     </div>
@@ -1246,15 +1424,60 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                         Syllable Density
                       </div>
                       <b style={{ fontSize: '13px', display: 'block', marginTop: '2px', color: 'var(--ink)' }}>
-                        {analysis.readability.avgSyllablesPerWord} syllables / word
+                        {analysisReadability.avgSyllablesPerWord} syllables / word
                       </b>
                       <div style={{ fontSize: '11px', color: '#475569', marginTop: '2px' }}>
-                        {analysis.readability.avgSyllablesPerWord >= 1.7
-                          ? 'High proportion of multisyllabic specialized terms'
+                        {analysisReadability.avgSyllablesPerWord >= 1.7
+                          ? 'High proportion of multisyllabic terms'
                           : 'Predominantly everyday conversational words'}
                       </div>
                     </div>
                   </div>
+
+                  {/* Comparative analysis with source text if available */}
+                  {sourceReadability && (
+                    <div
+                      style={{
+                        marginTop: '10px',
+                        padding: '10px 12px',
+                        background: '#f8fafc',
+                        border: '1px solid var(--line)',
+                        borderRadius: '10px',
+                        fontSize: '11px',
+                        color: '#334155',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        gap: '8px',
+                      }}
+                    >
+                      <div>
+                        <b style={{ color: 'var(--ink)' }}>Analysis vs. Source Document:</b>
+                        <span style={{ marginLeft: '6px' }}>
+                          Raw Source: <b>Grade {sourceReadability.fleschKincaidGrade.toFixed(1)}</b> ({sourceReadability.level})
+                          {' → '}
+                          Analysis Text: <b>Grade {analysisReadability.fleschKincaidGrade.toFixed(1)}</b> ({analysisReadability.level})
+                        </span>
+                      </div>
+                      {sourceReadability.fleschKincaidGrade !== analysisReadability.fleschKincaidGrade && (
+                        <span
+                          style={{
+                            background: sourceReadability.fleschKincaidGrade >= analysisReadability.fleschKincaidGrade ? '#ecfdf5' : '#eff6ff',
+                            color: sourceReadability.fleschKincaidGrade >= analysisReadability.fleschKincaidGrade ? '#065f46' : '#1d4ed8',
+                            border: `1px solid ${sourceReadability.fleschKincaidGrade >= analysisReadability.fleschKincaidGrade ? '#a7f3d0' : '#bfdbfe'}`,
+                            borderRadius: '999px',
+                            padding: '2px 8px',
+                            fontWeight: 700,
+                          }}
+                        >
+                          {sourceReadability.fleschKincaidGrade >= analysisReadability.fleschKincaidGrade
+                            ? `▼ ${(sourceReadability.fleschKincaidGrade - analysisReadability.fleschKincaidGrade).toFixed(1)} Grades Simpler`
+                            : `▲ ${(analysisReadability.fleschKincaidGrade - sourceReadability.fleschKincaidGrade).toFixed(1)} Grade Level`}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1365,6 +1588,9 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
             <div className="right">
               <button className="btn" onClick={() => window.print()}>
                 Print
+              </button>
+              <button className="btn" onClick={handleExportPDF} title="Export structured PDF document with jsPDF">
+                📄 Structured PDF
               </button>
               <button className="btn dark" onClick={onOpenExport}>
                 Download HTML

@@ -1,5 +1,12 @@
-const fs=require('fs'),path=require('path');
-const html=fs.readFileSync(path.join(__dirname,'dist/index.html'),'utf8');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distHtml = path.join(__dirname, 'dist/index.html');
+const srcHtml = path.join(__dirname, 'index.html');
+const html = fs.existsSync(distHtml) ? fs.readFileSync(distHtml, 'utf8') : fs.readFileSync(srcHtml, 'utf8');
 console.log("=== DocuWeave v3 Feature Audit ===\n");
 const checks=[
   // Core preserved

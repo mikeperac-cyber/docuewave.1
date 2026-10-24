@@ -1,4 +1,9 @@
-const fs=require('fs'),path=require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const stopwords=new Set("a an and are as at be by for from has he in is it its of on that the to was were will with this that have had what which you we our they them their there then than so if or not no yes but or into out over under about after before through during between among per via etc also such than can could should would may might must will shall being been do does did done because very more most many much such own same than too very just now".split(/\s+/));
 const cuePhrases=["in conclusion","in summary","key finding","key point","important","crucial","essential","significant","result","results show","we found","we recommend","conclusion","overall","therefore","however","moreover","first","second","finally","notably","critical"];
 function tokenize(s){return s.toLowerCase().replace(/[^a-z0-9\s]/g," ").split(/\s+/).filter(t=>t.length>=3 && !stopwords.has(t));}

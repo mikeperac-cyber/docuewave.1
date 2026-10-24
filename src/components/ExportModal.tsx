@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnalysisResult } from '../types';
 import { downloadBlob, escapeHtml, themes } from '../utils/engine';
+import { exportStructuredPDF } from '../utils/pdfExport';
 
 interface ExportModalProps {
   isOpen: boolean;
@@ -33,6 +34,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   }, [isOpen, analysis]);
 
   if (!isOpen || !analysis) return null;
+
+  const handleExportPDF = () => {
+    if (!analysis) return;
+    exportStructuredPDF(analysis, { includeSource, rawText });
+    onClose();
+  };
 
   const handleExportPage = () => {
     const webpageEl = document.getElementById('webpage');
@@ -158,6 +165,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
         <div style={{ padding: '14px', display: 'grid', gap: '10px' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: '10px' }}>
+            <button
+              className="btn"
+              onClick={handleExportPDF}
+              style={{ background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)' }}
+            >
+              📄 Structured PDF (jsPDF)
+            </button>
             <button className="btn dark" onClick={handleExportPage}>
               🌐 HTML (themed)
             </button>
