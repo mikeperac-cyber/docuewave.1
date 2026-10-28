@@ -108,7 +108,8 @@ export function exportStructuredPDF(analysis: AnalysisResult, options: PDFExport
     ? `Grade ${analysis.readability.fleschKincaidGrade.toFixed(1)} (${cleanForPDF(analysis.readability.level)})`
     : 'Standard';
 
-  const metaText = `Words: ${analysis.wc.toLocaleString()}  |  Reading Time: ~${analysis.readingTime} min  |  Pages: ${analysis.pages}  |  Distilled: ${analysis.summaryRatio}%  |  Readability: ${readabilityGrade}`;
+  const estAnalysisRead = analysis.analysisReadingTime ?? Math.max(1, Math.round(((analysis.summaryWords || 200) / 200) * 10) / 10);
+  const metaText = `Doc Words: ${analysis.wc.toLocaleString()}  |  Doc Read: ~${analysis.readingTime}m  |  Analysis Read: ~${estAnalysisRead}m (200 WPM)  |  Distilled: ${analysis.summaryRatio}%  |  Readability: ${readabilityGrade}`;
   doc.text(metaText, margin + 4, y + 5.8);
   y += 14;
 

@@ -148,6 +148,15 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     a.click();
   };
 
+  const handlePrint = () => {
+    // Close modal first so viewport is unobstructed
+    onClose();
+    // Allow state update and DOM repaint before launching print dialog
+    setTimeout(() => {
+      window.print();
+    }, 120);
+  };
+
   return (
     <div
       className="modal open"
@@ -171,6 +180,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               style={{ background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)' }}
             >
               📄 Structured PDF (jsPDF)
+            </button>
+            <button
+              className="btn"
+              onClick={handlePrint}
+              style={{ background: '#0284c7', color: '#fff', borderColor: '#0284c7' }}
+              title="Print document with print-friendly media query layout (hides UI shell and formats for paper)"
+            >
+              🖨️ Print Document
             </button>
             <button className="btn dark" onClick={handleExportPage}>
               🌐 HTML (themed)

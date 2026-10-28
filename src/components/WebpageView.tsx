@@ -44,6 +44,12 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
   const [activeSection, setActiveSection] = useState('s-summary');
   const [readProgress, setReadProgress] = useState(0);
 
+  // Floating Table of Contents state
+  const [isFloatingTocOpen, setIsFloatingTocOpen] = useState(false);
+  const [floatingTocTab, setFloatingTocTab] = useState<'headings' | 'sections'>('headings');
+  const [tocFilterQuery, setTocFilterQuery] = useState('');
+  const [activeHeadingIdx, setActiveHeadingIdx] = useState<number | null>(null);
+
   const qrRef = useRef<HTMLDivElement>(null);
   const webpageRef = useRef<HTMLElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
@@ -69,6 +75,51 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
     const sentences = splitSentencesOptimized(rawText);
     return calculateReadability(words, sentences);
   }, [rawText]);
+
+  // Calculate estimated reading time for the generated analysis based on a standard 200 words per minute (WPM) rate
+  const analysisReadingMetrics = useMemo(() => {
+    const WPM = 200;
+    const summaryText = analysis.summary || '';
+    const pointsText = (analysis.keyPoints || []).map((p) => p.sentence).join(' ');
+    const factorsText = (analysis.factors || []).map((f) => `${f.title} ${f.desc} ${f.evidence || ''}`).join(' ');
+    const oneLinerText = analysis.oneLiner || '';
+
+    const fullAnalysisText = `${summaryText} ${pointsText} ${factorsText} ${oneLinerText}`.trim();
+    const words = fullAnalysisText ? fullAnalysisText.split(/\s+/).filter(Boolean).length : (analysis.summaryWords || 0);
+
+    const rawMinutes = words / WPM;
+    const totalSeconds = Math.round(rawMinutes * 60);
+
+    let displayTime = '';
+    if (words === 0) {
+      displayTime = '0 min';
+    } else if (words < 70) {
+      displayTime = '< 1 min';
+    } else if (rawMinutes < 1.0) {
+      displayTime = '~1 min';
+    } else {
+      const rounded = Math.round(rawMinutes * 10) / 10;
+      displayTime = `${rounded} min`;
+    }
+
+    const detailedTime = totalSeconds < 60
+      ? `${totalSeconds}s`
+      : `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
+
+    const docReadTime = analysis.readingTime || Math.max(1, Math.ceil((analysis.wc || 1) / WPM));
+    const timeSavedMinutes = Math.max(0, Math.round(docReadTime - rawMinutes));
+    const timeSavedPercent = Math.max(0, Math.min(99, Math.round((1 - (words / Math.max(1, analysis.wc))) * 100)));
+
+    return {
+      wpm: WPM,
+      words,
+      rawMinutes,
+      displayTime,
+      detailedTime,
+      timeSavedMinutes,
+      timeSavedPercent,
+    };
+  }, [analysis.summary, analysis.keyPoints, analysis.factors, analysis.oneLiner, analysis.summaryWords, analysis.readingTime, analysis.wc]);
 
   // Visual highlighting state and top 5 keywords from TF-IDF analysis
   const [showKeywordHighlights, setShowKeywordHighlights] = useState(true);
@@ -136,6 +187,79 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
     }
   }, [analysis.title, analysis.wc]);
 
+  // Jump to an element with smooth scroll and target glowing pulse
+  const jumpToElement = (targetId: string) => {
+    const el = document.getElementById(targetId);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      el.classList.remove('target-glow-highlight');
+      void el.offsetWidth;
+      el.classList.add('target-glow-highlight');
+      setTimeout(() => el.classList.remove('target-glow-highlight'), 1700);
+    }
+  };
+
+  // Jump directly to a document heading by index
+  const jumpToHeading = (idx: number) => {
+    // 1. Try direct doc-heading outline card
+    const headingEl = document.getElementById(`doc-heading-${idx}`);
+    if (headingEl) {
+      jumpToElement(`doc-heading-${idx}`);
+      return;
+    }
+    // 2. Try section heading anchor in key points
+    const secEl = document.getElementById(`sec-heading-${idx}`);
+    if (secEl) {
+      jumpToElement(`sec-heading-${idx}`);
+      return;
+    }
+    // 3. Try to locate key point corresponding to section's start sentence index
+    const sec = analysis.sections?.[idx];
+    if (sec) {
+      const pt = analysis.keyPoints.find((p) => p.idx >= sec.startIdx);
+      if (pt) {
+        const ptEl = document.querySelector(`li[data-idx="${pt.idx}"]`) as HTMLElement | null;
+        if (ptEl) {
+          ptEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          ptEl.classList.remove('target-glow-highlight');
+          void ptEl.offsetWidth;
+          ptEl.classList.add('target-glow-highlight');
+          setTimeout(() => ptEl.classList.remove('target-glow-highlight'), 1700);
+          return;
+        }
+      }
+    }
+    // Fallback: jump to outline or points
+    jumpToElement('s-headings');
+  };
+
+  // Filtered document headings for TOC search
+  const filteredHeadings = useMemo(() => {
+    const list = analysis.headings || [];
+    if (!tocFilterQuery.trim()) {
+      return list.map((title, originalIndex) => ({ title, originalIndex }));
+    }
+    const q = tocFilterQuery.toLowerCase();
+    return list
+      .map((title, originalIndex) => ({ title, originalIndex }))
+      .filter((h) => h.title.toLowerCase().includes(q));
+  }, [analysis.headings, tocFilterQuery]);
+
+  // Keyboard shortcut listener: Alt+T toggles floating TOC, Esc closes it
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.altKey && e.key.toLowerCase() === 't') {
+        e.preventDefault();
+        setIsFloatingTocOpen((prev) => !prev);
+      }
+      if (e.key === 'Escape' && isFloatingTocOpen) {
+        setIsFloatingTocOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isFloatingTocOpen]);
+
   // Scroll spy & reading progress bar
   useEffect(() => {
     const handleScroll = () => {
@@ -146,6 +270,7 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
       setReadProgress(scrolled * 100);
 
       const sectionIds = [
+        's-headings',
         's-summary',
         's-points',
         's-factors',
@@ -162,16 +287,29 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
         const el = document.getElementById(id);
         if (el) {
           const r = el.getBoundingClientRect();
-          if (r.top < 140) current = id;
+          if (r.top < 160) current = id;
         }
       });
       setActiveSection(current);
+
+      // Track active document heading for floating TOC
+      if (analysis.headings && analysis.headings.length > 0) {
+        let curHeading: number | null = null;
+        analysis.headings.forEach((_, idx) => {
+          const el = document.getElementById(`doc-heading-${idx}`) || document.getElementById(`sec-heading-${idx}`);
+          if (el) {
+            const r = el.getBoundingClientRect();
+            if (r.top < 220) curHeading = idx;
+          }
+        });
+        setActiveHeadingIdx(curHeading);
+      }
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     handleScroll();
     return () => window.removeEventListener('scroll', handleScroll);
-  }, []);
+  }, [analysis.headings]);
 
   // Webpage in-page text search and highlighting
   const searchWebpage = (q: string) => {
@@ -362,6 +500,36 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
     ...analysis.topBigrams.slice(0, 4),
   ].slice(0, 10);
 
+  // Structured report sections for Table of Contents
+  const reportSections = useMemo(
+    () => [
+      ...(analysis.headings && analysis.headings.length > 0
+        ? [{ id: 's-headings', title: 'Document Outline & Headings', icon: '📑', count: `${analysis.headings.length} hdgs` }]
+        : []),
+      { id: 's-summary', title: 'Comprehensive Summary', icon: '◐', count: `${analysis.summaryWords}w` },
+      { id: 's-points', title: 'Key Points', icon: '▣', count: `${analysis.keyPoints.length} pts` },
+      { id: 's-factors', title: 'Important Factors', icon: '⬢', count: `${analysis.factors.length} factors` },
+      { id: 's-timeline', title: 'Timeline & Milestones', icon: '◈', count: `${timelineItems.length} dates` },
+      { id: 's-glossary', title: 'Glossary & Key Terms', icon: '⬡', count: `${glossaryTerms.length} terms` },
+      { id: 's-insights', title: 'Insights & Signals', icon: '✦', count: `${analysis.topKeywords.length} kw` },
+      { id: 's-ask', title: 'Ask the Document', icon: '⌕', count: 'TF-IDF' },
+      { id: 's-coverage', title: 'Coverage Map', icon: '▦', count: '3 zones' },
+      { id: 's-stats', title: 'Stats & Readability', icon: '≡', count: `Grade ${analysisReadability.fleschKincaidGrade.toFixed(1)}` },
+      { id: 's-source', title: 'Source Text', icon: '≋', count: `${rawText.length.toLocaleString()} ch` },
+    ],
+    [
+      analysis.headings,
+      analysis.summaryWords,
+      analysis.keyPoints.length,
+      analysis.factors.length,
+      analysis.topKeywords.length,
+      timelineItems.length,
+      glossaryTerms.length,
+      analysisReadability.fleschKincaidGrade,
+      rawText.length,
+    ]
+  );
+
   const handleExportPDF = () => {
     if (!analysis) return;
     exportStructuredPDF(analysis, { includeSource: true, rawText });
@@ -422,38 +590,127 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
             onChange={(e) => searchWebpage(e.target.value)}
           />
           <h4>On this page</h4>
-          <a href="#s-summary" className={activeSection === 's-summary' ? 'active' : ''}>
+          {analysis.headings && analysis.headings.length > 0 && (
+            <a
+              href="#s-headings"
+              className={activeSection === 's-headings' ? 'active' : ''}
+              onClick={(e) => {
+                e.preventDefault();
+                jumpToElement('s-headings');
+              }}
+            >
+              📑 Document Outline ({analysis.headings.length})
+            </a>
+          )}
+          <a
+            href="#s-summary"
+            className={activeSection === 's-summary' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-summary');
+            }}
+          >
             Comprehensive Summary
           </a>
-          <a href="#s-points" className={activeSection === 's-points' ? 'active' : ''}>
+          <a
+            href="#s-points"
+            className={activeSection === 's-points' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-points');
+            }}
+          >
             Key Points
           </a>
-          <a href="#s-factors" className={activeSection === 's-factors' ? 'active' : ''}>
+          <a
+            href="#s-factors"
+            className={activeSection === 's-factors' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-factors');
+            }}
+          >
             Important Factors
           </a>
-          <a href="#s-timeline" className={activeSection === 's-timeline' ? 'active' : ''}>
+          <a
+            href="#s-timeline"
+            className={activeSection === 's-timeline' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-timeline');
+            }}
+          >
             Timeline
           </a>
-          <a href="#s-glossary" className={activeSection === 's-glossary' ? 'active' : ''}>
+          <a
+            href="#s-glossary"
+            className={activeSection === 's-glossary' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-glossary');
+            }}
+          >
             Glossary
           </a>
-          <a href="#s-insights" className={activeSection === 's-insights' ? 'active' : ''}>
+          <a
+            href="#s-insights"
+            className={activeSection === 's-insights' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-insights');
+            }}
+          >
             Insights & Entities
           </a>
-          <a href="#s-ask" className={activeSection === 's-ask' ? 'active' : ''}>
+          <a
+            href="#s-ask"
+            className={activeSection === 's-ask' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-ask');
+            }}
+          >
             Ask the document
           </a>
-          <a href="#s-coverage" className={activeSection === 's-coverage' ? 'active' : ''}>
+          <a
+            href="#s-coverage"
+            className={activeSection === 's-coverage' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-coverage');
+            }}
+          >
             Coverage Map
           </a>
-          <a href="#s-stats" className={activeSection === 's-stats' ? 'active' : ''}>
-            Stats
+          <a
+            href="#s-stats"
+            className={activeSection === 's-stats' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-stats');
+            }}
+          >
+            Stats & Readability
           </a>
-          <a href="#s-source" className={activeSection === 's-source' ? 'active' : ''}>
+          <a
+            href="#s-source"
+            className={activeSection === 's-source' ? 'active' : ''}
+            onClick={(e) => {
+              e.preventDefault();
+              jumpToElement('s-source');
+            }}
+          >
             Source Text
           </a>
 
           <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
+            <button
+              className={`btn small ${isFloatingTocOpen ? 'primary' : ''}`}
+              onClick={() => setIsFloatingTocOpen(!isFloatingTocOpen)}
+              title="Toggle floating Table of Contents overlay (Alt + T)"
+            >
+              📑 {isFloatingTocOpen ? 'Close Floating TOC' : 'Open Floating TOC'}
+            </button>
             <button className="btn small" onClick={onOpenTheme}>
               🎨 Change theme
             </button>
@@ -463,6 +720,30 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
             <button className="btn small" onClick={onOpenCompare}>
               ⇔ Compare in library
             </button>
+          </div>
+
+          {/* Estimated Analysis Reading Time pill */}
+          <div
+            id="tocReadingTime"
+            style={{
+              marginTop: '10px',
+              padding: '8px 10px',
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: '10px',
+              fontSize: '11px',
+              color: '#1e40af',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              fontWeight: 600,
+            }}
+            title={`Estimated reading time for the generated analysis: ${analysisReadingMetrics.words} words at 200 words per minute rate`}
+          >
+            <span style={{ fontSize: '13px' }}>⏱️</span>
+            <span>
+              <b>Analysis Read:</b> {analysisReadingMetrics.displayTime} (200 WPM)
+            </span>
           </div>
 
           <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--line)' }}>
@@ -523,6 +804,18 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
           {/* Webpage reading & view controls */}
           <div className="webpage-controls">
             <div className="left">
+              <button
+                className={`btn small ${isFloatingTocOpen ? 'primary' : ''}`}
+                onClick={() => setIsFloatingTocOpen(!isFloatingTocOpen)}
+                title="Toggle floating Table of Contents (Alt+T)"
+                style={{
+                  background: isFloatingTocOpen ? '#0f172a' : '#fff',
+                  color: isFloatingTocOpen ? '#fff' : 'inherit',
+                  borderColor: isFloatingTocOpen ? '#0f172a' : 'var(--line)',
+                }}
+              >
+                📑 Floating TOC {analysis.headings && analysis.headings.length > 0 ? `(${analysis.headings.length})` : ''}
+              </button>
               <button className="btn small" onClick={toggleEdit} title="Inline edit">
                 ✏️ {editMode ? 'Done' : 'Edit'}
               </button>
@@ -590,8 +883,9 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
           {/* Webpage Hero */}
           <div className="webpage-hero">
             <div className="kicker" id="wKicker">
-              Generated {analysis.isCompare ? 'compare' : 'webpage'} • {analysis.wc.toLocaleString()} words •{' '}
-              {analysis.readingTime} min • {analysis.pages} pages • {analysis.summaryWords}w summary
+              Generated {analysis.isCompare ? 'compare' : 'webpage'} • {analysis.wc.toLocaleString()} doc words •{' '}
+              {analysis.readingTime} min doc • ⏱️ {analysisReadingMetrics.displayTime} analysis read (200 WPM) •{' '}
+              {analysis.pages} pages • {analysis.summaryWords}w summary
             </div>
             <h1
               id="wTitle"
@@ -615,6 +909,18 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
               <span className="hero-stat">◐ {analysis.wc.toLocaleString()} words</span>
               <span className="hero-stat">▣ {analysis.keyPoints.length} points</span>
               <span className="hero-stat">⬢ {analysis.factors.length} factors</span>
+              <span
+                className="hero-stat"
+                id="wHeroAnalysisReadTime"
+                title={`Estimated reading time for the generated analysis: ${analysisReadingMetrics.words} words at standard 200 words per minute rate (${analysisReadingMetrics.detailedTime})`}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.22)',
+                  border: '1px solid rgba(255, 255, 255, 0.35)',
+                  fontWeight: 700,
+                }}
+              >
+                ⏱️ {analysisReadingMetrics.displayTime} analysis read (200 WPM)
+              </span>
               <span className="hero-stat">{analysis.topKeywords[0]?.term || 'analysis'} • top</span>
               <span className="hero-stat">{analysis.summaryRatio}% distilled</span>
               {analysisReadability && (
@@ -637,6 +943,103 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
             id="wBody"
             style={{ maxWidth: `${contentWidth}px`, margin: '0 auto', fontSize: `${fontSize}px` }}
           >
+            {/* Document Headings & Outline Section */}
+            {analysis.headings && analysis.headings.length > 0 && (
+              <div className="section" id="s-headings">
+                <h2>
+                  <span className="h-left">
+                    <i style={{ background: '#4f46e5' }}>📑</i> Document Headings & Outline
+                  </span>
+                  <small
+                    id="headingsMeta"
+                    style={{
+                      fontFamily: 'Inter,sans-serif',
+                      fontSize: '11px',
+                      color: 'var(--muted)',
+                      fontWeight: 600,
+                      marginLeft: '6px',
+                    }}
+                  >
+                    • {analysis.headings.length} headings detected • click to navigate directly
+                  </small>
+                </h2>
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+                    gap: '10px',
+                    marginTop: '12px',
+                  }}
+                >
+                  {analysis.headings.map((h, i) => {
+                    const sec = analysis.sections?.[i];
+                    const nextSecStart = analysis.sections?.[i + 1]?.startIdx ?? Infinity;
+                    const secPoints = (analysis.keyPoints || []).filter((p) => {
+                      return p.idx >= (sec?.startIdx ?? 0) && p.idx < nextSecStart;
+                    });
+                    const isActive = activeHeadingIdx === i;
+
+                    return (
+                      <div
+                        key={i}
+                        id={`doc-heading-${i}`}
+                        onClick={() => jumpToHeading(i)}
+                        style={{
+                          border: isActive ? '1.5px solid var(--accent)' : '1px solid var(--line)',
+                          background: isActive ? 'rgba(255, 77, 46, 0.05)' : '#f8fafc',
+                          borderRadius: '12px',
+                          padding: '11px 13px',
+                          cursor: 'pointer',
+                          transition: 'all 0.15s ease',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                        }}
+                        title={`Click to navigate to Section ${i + 1}: ${h}`}
+                      >
+                        <span
+                          style={{
+                            width: '26px',
+                            height: '26px',
+                            borderRadius: '8px',
+                            background: isActive ? 'var(--accent)' : '#0f172a',
+                            color: '#fff',
+                            display: 'grid',
+                            placeItems: 'center',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            flexShrink: 0,
+                          }}
+                        >
+                          {i + 1}
+                        </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <b
+                            style={{
+                              fontSize: '12px',
+                              display: 'block',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              color: 'var(--ink)',
+                            }}
+                          >
+                            {h}
+                          </b>
+                          <span style={{ fontSize: '11px', color: 'var(--muted)' }}>
+                            {secPoints.length > 0 ? `${secPoints.length} key points mapped` : `Section ${i + 1}`}
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '13px', color: isActive ? 'var(--accent)' : 'var(--muted)' }}>
+                          →
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* 1. Summary */}
             <div className="section" id="s-summary">
               <h2>
@@ -663,6 +1066,25 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                 >
                   • {analysis.summaryWords}w • {analysis.summaryRatio}% •{' '}
                   {analysis.coverage.filter(Boolean).length}/3 zones
+                  <span
+                    id="summaryAnalysisReadTimeBadge"
+                    style={{
+                      marginLeft: '8px',
+                      background: '#eff6ff',
+                      color: '#1d4ed8',
+                      border: '1px solid #bfdbfe',
+                      borderRadius: '999px',
+                      padding: '2px 8px',
+                      fontSize: '10px',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                    }}
+                    title={`Estimated reading time for the generated analysis at standard 200 words per minute rate (${analysisReadingMetrics.words} words total)`}
+                  >
+                    ⏱️ {analysisReadingMetrics.displayTime} read (200 WPM)
+                  </span>
                   {analysisReadability && (
                     <span
                       style={{
@@ -806,9 +1228,18 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
               <ol className={`points ${editMode ? 'editing' : ''}`} id="wPoints">
                 {analysis.keyPoints.map((p, i) => {
                   const secIdx = analysis.sections.findIndex((s) => p.idx >= s.startIdx);
-                  const secName = analysis.sections[Math.max(0, secIdx)]?.title || '—';
+                  const validSecIdx = Math.max(0, secIdx);
+                  const secName = analysis.sections[validSecIdx]?.title || '—';
+                  const isFirstOfSec =
+                    i === 0 ||
+                    Math.max(0, analysis.sections.findIndex((s) => (analysis.keyPoints[i - 1]?.idx ?? 0) >= s.startIdx)) !== validSecIdx;
                   return (
-                    <li key={i} data-idx={p.idx} className={editMode ? 'editing' : ''}>
+                    <li
+                      key={i}
+                      data-idx={p.idx}
+                      id={isFirstOfSec ? `sec-heading-${validSecIdx}` : undefined}
+                      className={editMode ? 'editing' : ''}
+                    >
                       <b>{i + 1}</b>
                       <div style={{ flex: 1 }}>
                         <div
@@ -1174,7 +1605,20 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                 </div>
                 <div className="stat">
                   <b>{analysis.readingTime} min</b>
-                  <span>Read time</span>
+                  <span>Doc Read Time</span>
+                </div>
+                <div
+                  className="stat"
+                  id="statAnalysisReadTime"
+                  style={{
+                    border: '1.5px solid #93c5fd',
+                    background: '#eff6ff',
+                  }}
+                >
+                  <b style={{ color: '#1d4ed8' }}>{analysisReadingMetrics.displayTime}</b>
+                  <span title={`Calculated across ${analysisReadingMetrics.words} words of generated analysis at standard 200 WPM rate`}>
+                    Analysis Read Time (200 WPM)
+                  </span>
                 </div>
                 <div className="stat">
                   <b>{analysis.pages}</b>
@@ -1203,6 +1647,76 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
                     </div>
                   </>
                 )}
+              </div>
+
+              {/* Reading Efficiency & Time-Savings Card */}
+              <div
+                id="wReadingEfficiency"
+                style={{
+                  marginTop: '12px',
+                  border: '1px solid var(--line)',
+                  borderRadius: '14px',
+                  padding: '12px 16px',
+                  background: '#f8fafc',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  flexWrap: 'wrap',
+                  gap: '10px',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <span
+                    style={{
+                      width: '32px',
+                      height: '32px',
+                      borderRadius: '8px',
+                      background: '#2563eb',
+                      color: '#fff',
+                      display: 'grid',
+                      placeItems: 'center',
+                      fontSize: '16px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    ⏱️
+                  </span>
+                  <div>
+                    <b style={{ fontSize: '13px', color: 'var(--ink)' }}>
+                      Estimated Analysis Reading Time: {analysisReadingMetrics.displayTime}
+                    </b>
+                    <div style={{ fontSize: '11px', color: 'var(--muted)', marginTop: '2px' }}>
+                      Calculated at standard <b>200 words per minute</b> ({analysisReadingMetrics.words} words total · {analysisReadingMetrics.detailedTime})
+                    </div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <span
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid var(--line)',
+                      borderRadius: '999px',
+                      padding: '3px 10px',
+                      fontSize: '11px',
+                      color: '#475569',
+                    }}
+                  >
+                    Doc: <b>{analysis.readingTime} min</b> ({analysis.wc.toLocaleString()} words)
+                  </span>
+                  <span
+                    style={{
+                      background: '#ecfdf5',
+                      color: '#065f46',
+                      border: '1px solid #a7f3d0',
+                      borderRadius: '999px',
+                      padding: '3px 10px',
+                      fontWeight: 700,
+                      fontSize: '11px',
+                    }}
+                  >
+                    ⚡ Saves ~{analysisReadingMetrics.timeSavedMinutes} min ({analysisReadingMetrics.timeSavedPercent}% faster)
+                  </span>
+                </div>
               </div>
 
               {analysisReadability && (
@@ -1601,6 +2115,273 @@ export const WebpageView: React.FC<WebpageViewProps> = ({
             </div>
           </div>
         </article>
+
+        {/* Floating Table of Contents */}
+        <div className="floating-toc-wrapper" id="wFloatingTOC" aria-label="Floating Table of Contents">
+          {/* Expanded Navigation Panel */}
+          {isFloatingTocOpen && (
+            <div className="floating-toc-panel">
+              {/* Reading Progress Bar */}
+              <div style={{ height: '3px', background: '#f1f5f9', position: 'relative' }}>
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${readProgress}%`,
+                    background: 'var(--accent)',
+                    transition: 'width 0.1s ease',
+                  }}
+                />
+              </div>
+
+              {/* Panel Header */}
+              <div className="floating-toc-head">
+                <div>
+                  <b style={{ fontSize: '13px', color: 'var(--ink)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span>📑</span> Table of Contents
+                  </b>
+                  <div style={{ fontSize: '10px', color: 'var(--muted)', marginTop: '2px' }}>
+                    {analysis.headings?.length || 0} headings • {Math.round(readProgress)}% read • ⏱️ {analysisReadingMetrics.displayTime} analysis read (200 WPM)
+                  </div>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <button
+                    onClick={() => setIsFloatingTocOpen(false)}
+                    style={{
+                      border: 'none',
+                      background: '#f1f5f9',
+                      borderRadius: '8px',
+                      width: '24px',
+                      height: '24px',
+                      display: 'grid',
+                      placeItems: 'center',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      color: 'var(--muted)',
+                    }}
+                    title="Minimize TOC (Esc)"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {/* Navigation Tabs */}
+              <div className="floating-toc-tabs">
+                <button
+                  className={`floating-toc-tab-btn ${floatingTocTab === 'headings' ? 'active' : ''}`}
+                  onClick={() => setFloatingTocTab('headings')}
+                >
+                  Document Headings ({analysis.headings?.length || 0})
+                </button>
+                <button
+                  className={`floating-toc-tab-btn ${floatingTocTab === 'sections' ? 'active' : ''}`}
+                  onClick={() => setFloatingTocTab('sections')}
+                >
+                  Report Sections
+                </button>
+              </div>
+
+              {/* Search Filter */}
+              <div className="floating-toc-search-wrap">
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    className="floating-toc-search"
+                    placeholder={
+                      floatingTocTab === 'headings'
+                        ? '🔍 Quick filter headings…'
+                        : '🔍 Quick filter sections…'
+                    }
+                    value={tocFilterQuery}
+                    onChange={(e) => setTocFilterQuery(e.target.value)}
+                  />
+                  {tocFilterQuery && (
+                    <button
+                      onClick={() => setTocFilterQuery('')}
+                      style={{
+                        position: 'absolute',
+                        right: '8px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'var(--muted)',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                      }}
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Navigation Items List */}
+              <div className="floating-toc-list">
+                {floatingTocTab === 'headings' ? (
+                  filteredHeadings.length === 0 ? (
+                    <div style={{ padding: '16px', textAlign: 'center', fontSize: '11px', color: 'var(--muted)' }}>
+                      {analysis.headings?.length === 0
+                        ? 'No explicit headings detected in source text.'
+                        : `No headings match "${tocFilterQuery}".`}
+                    </div>
+                  ) : (
+                    filteredHeadings.map((item) => {
+                      const isActive = activeHeadingIdx === item.originalIndex;
+                      const sec = analysis.sections?.[item.originalIndex];
+                      const nextSecStart = analysis.sections?.[item.originalIndex + 1]?.startIdx ?? Infinity;
+                      const secPoints = (analysis.keyPoints || []).filter(
+                        (p) => p.idx >= (sec?.startIdx ?? 0) && p.idx < nextSecStart
+                      );
+
+                      return (
+                        <button
+                          key={item.originalIndex}
+                          className={`floating-toc-item ${isActive ? 'active' : ''}`}
+                          onClick={() => {
+                            jumpToHeading(item.originalIndex);
+                          }}
+                          title={`Jump to Section ${item.originalIndex + 1}: ${item.title}`}
+                        >
+                          <span className="floating-toc-num">{item.originalIndex + 1}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <span
+                              style={{
+                                display: 'block',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                fontWeight: isActive ? 700 : 500,
+                              }}
+                            >
+                              {item.title}
+                            </span>
+                            <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block' }}>
+                              {secPoints.length > 0 ? `${secPoints.length} points` : `Section ${item.originalIndex + 1}`}
+                            </span>
+                          </div>
+                          {isActive && (
+                            <span
+                              style={{
+                                width: '6px',
+                                height: '6px',
+                                borderRadius: '50%',
+                                background: 'var(--accent)',
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                        </button>
+                      );
+                    })
+                  )
+                ) : (
+                  reportSections
+                    .filter(
+                      (sec) =>
+                        !tocFilterQuery ||
+                        sec.title.toLowerCase().includes(tocFilterQuery.toLowerCase())
+                    )
+                    .map((sec) => {
+                      const isActive = activeSection === sec.id;
+                      return (
+                        <button
+                          key={sec.id}
+                          className={`floating-toc-item ${isActive ? 'active' : ''}`}
+                          onClick={() => jumpToElement(sec.id)}
+                        >
+                          <span
+                            className="floating-toc-num"
+                            style={{
+                              background: isActive ? 'var(--accent)' : '#f1f5f9',
+                              color: isActive ? '#fff' : 'var(--ink)',
+                            }}
+                          >
+                            {sec.icon}
+                          </span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <span
+                              style={{
+                                display: 'block',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                                fontWeight: isActive ? 700 : 500,
+                              }}
+                            >
+                              {sec.title}
+                            </span>
+                            <span style={{ fontSize: '10px', color: 'var(--muted)', display: 'block' }}>
+                              {sec.count}
+                            </span>
+                          </div>
+                          {isActive && (
+                            <span
+                              style={{
+                                width: '6px',
+                                height: '6px',
+                                borderRadius: '50%',
+                                background: 'var(--accent)',
+                                flexShrink: 0,
+                              }}
+                            />
+                          )}
+                        </button>
+                      );
+                    })
+                )}
+              </div>
+
+              {/* Panel Footer */}
+              <div className="floating-toc-foot">
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <button
+                    className="btn small"
+                    onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+                    title="Scroll to top of document"
+                  >
+                    ↑ Top
+                  </button>
+                  <button
+                    className="btn small"
+                    onClick={() => setIsFocusMode(!isFocusMode)}
+                    title="Toggle distraction-free focus mode"
+                  >
+                    {isFocusMode ? '◐ Normal' : '◎ Focus'}
+                  </button>
+                </div>
+                <span style={{ color: 'var(--muted)', fontSize: '10px' }}>
+                  <kbd style={{ background: '#e2e8f0', padding: '1px 4px', borderRadius: '4px', fontSize: '9px' }}>
+                    Alt+T
+                  </kbd>{' '}
+                  toggle
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* Floating Trigger Pill */}
+          <button
+            className="floating-toc-pill-btn"
+            onClick={() => setIsFloatingTocOpen(!isFloatingTocOpen)}
+            title="Toggle floating Table of Contents (Alt + T)"
+            aria-expanded={isFloatingTocOpen}
+          >
+            <span style={{ fontSize: '14px' }}>📑</span>
+            <span>
+              {isFloatingTocOpen
+                ? 'Close TOC'
+                : activeHeadingIdx !== null && analysis.headings?.[activeHeadingIdx]
+                ? analysis.headings[activeHeadingIdx].slice(0, 22) + (analysis.headings[activeHeadingIdx].length > 22 ? '…' : '')
+                : 'Table of Contents'}
+            </span>
+            {analysis.headings && analysis.headings.length > 0 && (
+              <span className="badge-pill">{analysis.headings.length} hdgs</span>
+            )}
+            <span className="progress-pill">{Math.round(readProgress)}%</span>
+            <span style={{ fontSize: '10px', opacity: 0.7 }}>{isFloatingTocOpen ? '▼' : '▲'}</span>
+          </button>
+        </div>
       </div>
     </section>
   );

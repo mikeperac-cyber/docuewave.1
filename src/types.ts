@@ -66,6 +66,7 @@ export interface AnalysisResult {
   pages: number;
   coverage: boolean[];
   readability: ReadabilityScore;
+  analysisReadingTime?: number;
   isCompare?: boolean;
   compareParts?: { name: string; wc: number; summary: string }[];
 }

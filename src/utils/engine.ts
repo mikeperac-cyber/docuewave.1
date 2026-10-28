@@ -637,6 +637,15 @@ export function analyzeDocumentOptimized(
     pages: info?.pages || Math.max(1, Math.ceil(wc / 430)),
     coverage: summaryObj.coverage,
     readability: calculateReadability(words, sentences),
+    analysisReadingTime: Math.max(
+      0.5,
+      Math.round(
+        ((summary.split(/\s+/).filter(Boolean).length +
+          keyPoints.reduce((acc, p) => acc + p.sentence.split(/\s+/).filter(Boolean).length, 0)) /
+          200) *
+          10
+      ) / 10
+    ),
   };
 }
 
